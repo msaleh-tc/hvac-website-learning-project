@@ -45,7 +45,7 @@
 | **Styling** | Tailwind CSS 4 | Utility-first, fast iteration, zero CSS files to manage |
 | **Database** | PostgreSQL (via Neon) | Production-grade relational DB, free tier available |
 | **ORM** | Prisma 6 | Type-safe database queries, auto-generated types, migrations |
-| **Auth** | NextAuth.js 4 | Battle-tested auth for Next.js, supports multiple providers |
+| **Auth** | NextAuth.js 4 | Battle-tested auth for Next.js, JWT strategy with credentials provider |
 | **Validation** | Zod 4 | Runtime type validation, integrates with react-hook-form |
 | **Forms** | react-hook-form 7 | Performant forms with minimal re-renders |
 | **Icons** | lucide-react | Modern, tree-shakeable SVG icons |
@@ -77,18 +77,19 @@ npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --
 
 ```bash
 # Core dependencies
-npm install prisma @prisma/client next-auth @auth/prisma-adapter \
+npm install prisma @prisma/client next-auth \
   bcryptjs uuid zod react-hook-form @hookform/resolvers \
-  date-fns lucide-react clsx tailwind-merge
+  date-fns lucide-react clsx tailwind-merge dotenv
 
 # Dev dependencies (type definitions)
 npm install -D @types/bcryptjs @types/uuid prisma
 ```
 
 **What each package does:**
-- `prisma` / `@prisma/client`: Database ORM and client
-- `next-auth` / `@auth/prisma-adapter`: Authentication with database session storage
+- `prisma` / `@prisma/client`: Database ORM and client (generator: `prisma-client-js`, imported from `@prisma/client`)
+- `next-auth`: Authentication with JWT session strategy (no PrismaAdapter — it conflicts with credentials provider)
 - `bcryptjs`: Password hashing (12 rounds of salted hashing)
+- `dotenv`: Environment variable loading (used in `prisma.config.ts` and seed script)
 - `uuid`: Unique ID generation
 - `zod`: Schema validation for API inputs and forms
 - `react-hook-form` / `@hookform/resolvers`: Form state management with Zod integration
@@ -104,8 +105,10 @@ npx prisma init
 
 This creates:
 - `prisma/schema.prisma` — Database schema definition
-- `prisma.config.ts` — Prisma configuration
+- `prisma.config.ts` — Prisma configuration (uses `engine: "classic"` and `import "dotenv/config"` for env loading)
 - `.env` — Environment variables template
+
+**Note:** The `postinstall` script in `package.json` runs `prisma generate` automatically on every `npm install`, so the Prisma client is always up to date.
 
 ### 3.4 Initialize Git & GitHub
 
@@ -123,8 +126,12 @@ git push -u origin main
 
 ### 3.5 Set Up Branch Protection
 
+Branch protection is enabled on the `main` branch, requiring the following status checks to pass:
+- **Lint & Type Check**
+- **Build**
+
 ```bash
-gh api repos/msaleh-tc/comfortair-pro/branches/main/protection -X PUT --input - <<'EOF'
+gh api repos/msaleh-tc/hvac-website-learning-project/branches/main/protection -X PUT --input - <<'EOF'
 {
   "required_status_checks": {
     "strict": true,
@@ -196,9 +203,8 @@ src/
 │   ├── validations.ts            # Zod schemas
 │   └── utils.ts                  # Helper functions
 ├── middleware.ts                  # Auth middleware (route protection)
-├── types/
-│   └── next-auth.d.ts            # NextAuth type extensions
-└── generated/prisma/             # Auto-generated Prisma client (gitignored)
+└── types/
+    └── next-auth.d.ts            # NextAuth type extensions
 ```
 
 **Key architectural decisions:**
@@ -213,6 +219,8 @@ src/
 ## 5. Database Design
 
 ### Schema (prisma/schema.prisma)
+
+**Generator:** Uses `prisma-client-js` with `binaryTargets = ["native", "rhel-openssl-3.0.x"]`. The `rhel-openssl-3.0.x` target is required for Vercel's serverless runtime (Amazon Linux). The Prisma client is imported from `@prisma/client`.
 
 **Models:**
 - `User` — Users with roles (CUSTOMER, TECHNICIAN, ADMIN)
@@ -258,11 +266,13 @@ npx prisma studio
 
 ### Seed Data
 
-The seed script creates:
+The seed script (`prisma/seed.ts`) imports `dotenv/config` at the top for standalone execution and creates:
 - **Admin user**: admin@comfortairpro.com / admin123456
 - **Demo customer**: demo@example.com / customer123456
 - **3 sample service requests** (various statuses)
 - **2 sample contact messages**
+
+These demo credentials work on both production and development environments.
 
 ---
 
@@ -270,12 +280,13 @@ The seed script creates:
 
 ### How It Works
 
-1. **NextAuth.js** handles session management with JWT strategy
+1. **NextAuth.js** handles session management with **JWT strategy** (no database sessions)
 2. **Credentials provider** for email/password authentication
-3. **bcryptjs** hashes passwords with 12 rounds of salting
-4. **JWT callbacks** inject user role into the session token
-5. **Middleware** (`src/middleware.ts`) protects `/dashboard/*` and `/admin/*` routes
-6. Admin routes check `role === "ADMIN"` at both middleware and page level
+3. **No PrismaAdapter** — it was removed because it conflicts with the credentials provider by trying to create database sessions instead of using JWT
+4. **bcryptjs** hashes passwords with 12 rounds of salting
+5. **JWT callbacks** inject user role into the session token
+6. **Middleware** (`src/middleware.ts`) protects `/dashboard/*` and `/admin/*` routes
+7. Admin routes check `role === "ADMIN"` at both middleware and page level
 
 ### Auth Flow
 
@@ -357,61 +368,65 @@ Triggers on: git tags matching `v*` (e.g., `v1.0.0`)
 
 ## 9. Production Deployment Guide
 
-### Option A: Vercel (Recommended — Free Tier)
+### Vercel + Neon (Current Production Setup)
 
-Vercel is the native hosting platform for Next.js and offers the best performance.
+Both environments are **deployed and verified working**.
 
-#### Step 1: Create Neon PostgreSQL Database (Free)
+#### Neon PostgreSQL Database (Live)
 
-1. Go to https://neon.tech and sign up (free)
-2. Create a new project (e.g., "comfortair-pro")
-3. Copy the connection string:
-   ```
-   postgresql://username:password@ep-xxxxx.us-east-2.aws.neon.tech/neondb?sslmode=require
-   ```
-4. **Neon free tier includes:**
-   - 0.5 GB storage
-   - 190 compute hours/month
-   - Autoscaling to zero when idle
-   - Automatic backups
+- **Project**: square-union-44573497
+- **Region**: ap-southeast-1 (Singapore)
+- **Production branch**: `production`
+- **Dev branch**: `dev` (branched from production)
 
-#### Step 2: Deploy to Vercel (Free)
+Neon free tier includes:
+- 0.5 GB storage
+- 190 compute hours/month
+- Autoscaling to zero when idle
+- Automatic backups
 
-1. Go to https://vercel.com and sign up with GitHub
-2. Click "Import Project" → select `comfortair-pro` repository
-3. Configure environment variables:
-   - `DATABASE_URL` = your Neon connection string
-   - `NEXTAUTH_SECRET` = generate with `openssl rand -base64 32`
-   - `NEXTAUTH_URL` = `https://your-project.vercel.app`
-4. Click "Deploy"
+#### Vercel Deployments (Live)
 
-**Vercel free tier includes:**
-- Unlimited deployments
-- Automatic HTTPS/SSL
-- Global CDN (Edge Network)
-- Serverless functions
-- Preview deployments for PRs
-- Custom domain support
-- 100 GB bandwidth/month
+- **Vercel project**: `learning-project` under `16msaleh-9037s-projects`
+- **Production**: https://learning-project-gules-mu.vercel.app
+- **Development**: https://dev-learning-project.vercel.app (stable alias)
 
-#### Step 3: Run Database Migrations
+**Vercel SSO deployment protection** was disabled so the dev environment is publicly accessible.
+
+Since there is no GitHub integration with Vercel (enterprise GitHub account), deployments are done via CLI:
 
 ```bash
-# Set DATABASE_URL to production Neon connection string
+# Production deployment (from main branch)
+npx vercel deploy --prod
+
+# Dev deployment (from develop branch)
+npx vercel deploy
+npx vercel alias <deployment-url> dev-learning-project.vercel.app
+```
+
+#### Environment Variables Set in Vercel
+
+| Scope | Variables |
+|-------|-----------|
+| **Production** | `DATABASE_URL` (production Neon branch), `NEXTAUTH_SECRET`, `NEXTAUTH_URL` |
+| **Preview** | `DATABASE_URL` (dev Neon branch), `NEXTAUTH_SECRET`, `NEXTAUTH_URL` |
+
+#### Database Migrations & Seeding (Done)
+
+```bash
+# Migrations were applied to production
 DATABASE_URL="postgresql://..." npx prisma migrate deploy
 
-# Seed production database
+# Both environments were seeded
 DATABASE_URL="postgresql://..." npx tsx prisma/seed.ts
 ```
 
-#### Step 4: Set Up Vercel CLI (Optional)
+#### Demo Credentials (work on both environments)
 
-```bash
-npm i -g vercel
-vercel login
-vercel link  # Link to your project
-vercel env pull .env.local  # Pull production env vars for local dev
-```
+| Role | Email | Password |
+|------|-------|----------|
+| Admin | admin@comfortairpro.com | admin123456 |
+| Customer | demo@example.com | customer123456 |
 
 ### Option B: Railway (Alternative — Free Tier)
 
@@ -449,7 +464,7 @@ Can be deployed to:
 
 ### Free Domain Options
 
-1. **Vercel subdomain** (instant): `comfortair-pro.vercel.app`
+1. **Vercel subdomain** (current): `learning-project-gules-mu.vercel.app` (production), `dev-learning-project.vercel.app` (dev)
 2. **Freenom** (free TLDs): `.tk`, `.ml`, `.ga`, `.cf`
 3. **is-a.dev**: Free `yourname.is-a.dev` subdomain via GitHub PR
 4. **js.org**: Free `yourproject.js.org` subdomain
@@ -493,7 +508,8 @@ openssl rand -base64 32
 ### Where to Set Them
 
 - **Local dev**: `.env` file (gitignored)
-- **Vercel**: Project Settings → Environment Variables
+- **Vercel Production**: `DATABASE_URL` (production Neon branch), `NEXTAUTH_SECRET`, `NEXTAUTH_URL`
+- **Vercel Preview**: `DATABASE_URL` (dev Neon branch), `NEXTAUTH_SECRET`, `NEXTAUTH_URL`
 - **GitHub Actions**: Repository Settings → Secrets and Variables → Actions
 - **Docker**: `docker-compose.yml` or `-e` flags
 
@@ -608,11 +624,14 @@ git merge release/v1.1.0
 git push origin main
 ```
 
-### Automatic Deployments
+### Deployments
 
 - **Push to `main`** → CI runs (lint, type-check, build)
 - **Push tag `v*`** → Deploy workflow runs (migrate DB, deploy to Vercel)
-- **PR created** → CI runs + Vercel creates preview deployment
+- **PR created** → CI runs
+- **Manual CLI deploy** (required since no GitHub-Vercel integration):
+  - Production: `npx vercel deploy --prod` (from main branch)
+  - Dev: `npx vercel deploy` then `npx vercel alias <url> dev-learning-project.vercel.app` (from develop branch)
 
 ### Rollback
 
@@ -736,8 +755,8 @@ gh pr create --title "feat: add new feature" --body "Description"
 - [x] Dockerfile and docker-compose.yml
 - [x] Security headers and best practices
 - [x] Seed data for demo/testing
-- [ ] **TO DO**: Create Neon database and set `DATABASE_URL`
-- [ ] **TO DO**: Deploy to Vercel and set environment variables
-- [ ] **TO DO**: Run `prisma migrate deploy` against production DB
-- [ ] **TO DO**: Run seed script against production DB
+- [x] ~~**DONE**: Create Neon database and set `DATABASE_URL`~~ (Neon project: square-union-44573497, region: ap-southeast-1)
+- [x] ~~**DONE**: Deploy to Vercel and set environment variables~~ (production + dev environments live)
+- [x] ~~**DONE**: Run `prisma migrate deploy` against production DB~~
+- [x] ~~**DONE**: Run seed script against production DB~~
 - [ ] **TO DO**: Configure custom domain (optional)
