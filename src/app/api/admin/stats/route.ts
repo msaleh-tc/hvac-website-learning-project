@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { cacheGet, cacheSet } from "@/lib/redis";
 
 export async function GET() {
   try {
@@ -21,6 +22,11 @@ export async function GET() {
         { error: "Forbidden: admin access required" },
         { status: 403 }
       );
+    }
+
+    const cached = await cacheGet<Record<string, unknown>>("admin:stats");
+    if (cached) {
+      return NextResponse.json(cached);
     }
 
     const [
@@ -43,14 +49,18 @@ export async function GET() {
       prisma.contactMessage.count(),
     ]);
 
-    return NextResponse.json({
+    const stats = {
       totalUsers,
       totalRequests,
       pendingRequests,
       completedRequests,
       recentRequests,
       contactMessages,
-    });
+    };
+
+    await cacheSet("admin:stats", stats, 60);
+
+    return NextResponse.json(stats);
   } catch (error) {
     console.error("Admin stats error:", error);
     return NextResponse.json(

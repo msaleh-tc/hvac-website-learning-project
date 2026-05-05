@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { serviceRequestSchema } from "@/lib/validations";
 import { logEvent } from "@/lib/events";
 import { headers } from "next/headers";
+import { cacheGet, cacheSet, cacheDel } from "@/lib/redis";
 
 export async function GET() {
   try {
@@ -19,10 +20,18 @@ export async function GET() {
 
     const userId = (session.user as { id: string }).id;
 
+    const cacheKey = `dashboard:requests:${userId}`;
+    const cached = await cacheGet<unknown[]>(cacheKey);
+    if (cached) {
+      return NextResponse.json(cached);
+    }
+
     const serviceRequests = await prisma.serviceRequest.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
     });
+
+    await cacheSet(cacheKey, serviceRequests, 120);
 
     return NextResponse.json(serviceRequests);
   } catch (error) {
@@ -102,6 +111,9 @@ export async function POST(request: Request) {
       ip: headersList.get("x-forwarded-for"),
       userAgent: headersList.get("user-agent"),
     });
+
+    await cacheDel("admin:stats");
+    await cacheDel("dashboard:*");
 
     return NextResponse.json(serviceRequest, { status: 201 });
   } catch (error) {

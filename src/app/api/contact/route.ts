@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { contactSchema } from "@/lib/validations";
 import { logEvent } from "@/lib/events";
 import { headers } from "next/headers";
+import { cacheDel } from "@/lib/redis";
 
 export async function POST(request: Request) {
   try {
@@ -37,6 +38,8 @@ export async function POST(request: Request) {
       ip: headersList.get("x-forwarded-for"),
       userAgent: headersList.get("user-agent"),
     });
+
+    await cacheDel("admin:stats");
 
     return NextResponse.json(
       { message: "Message sent successfully", id: contactMessage.id },

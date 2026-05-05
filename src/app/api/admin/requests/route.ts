@@ -3,6 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { logEvent } from "@/lib/events";
+import { cacheDel } from "@/lib/redis";
 
 export async function PATCH(request: Request) {
   try {
@@ -36,6 +37,9 @@ export async function PATCH(request: Request) {
       category: "admin",
       metadata: { requestId: id, newStatus: status },
     });
+
+    await cacheDel("admin:*");
+    await cacheDel("dashboard:*");
 
     return NextResponse.json(updated);
   } catch {
